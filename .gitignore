@@ -1,0 +1,15 @@
+# Secrets / captured sessions — NEVER commit
+*.har
+.env
+cookidoo_cookie.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+cookiput_venv/
+
+# OS
+.DS_Store

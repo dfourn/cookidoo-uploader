@@ -1,0 +1,4 @@
+browser-cookie3==0.20.1
+lz4==4.4.5
+pycryptodomex==3.23.0
+requests==2.32.5
