@@ -16,6 +16,7 @@ letting Python read the browser's cookie-encryption key. Click Allow.
 """
 
 import argparse
+import shlex
 import sys
 
 import browser_cookie3
@@ -74,8 +75,10 @@ def main():
 
     value, browser, domain = result
     if args.export:
-        # Single-quote the value so shell special chars are safe.
-        print(f"export COOKIDOO_COOKIE='{value}'")
+        # shlex.quote() safely escapes any shell special chars (including a
+        # literal `'`), so `eval "$(... --export)"` can't be tricked into
+        # executing part of the cookie value.
+        print(f"export COOKIDOO_COOKIE={shlex.quote(value)}")
     else:
         print(f"Found `{COOKIE_NAME}` in {browser} (domain {domain}):\n", file=sys.stderr)
         print(value)

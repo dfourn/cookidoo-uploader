@@ -93,15 +93,19 @@ def step(main_text, settings=None, ingredient_spans=None):
     text = main_text
     annotations = []
 
+    cursor = 0
     for span in ingredient_spans or []:
-        off = text.find(span)
+        off = text.find(span, cursor)
         if off < 0:
-            raise ValueError(f"ingredient span {span!r} not found in step text")
+            raise ValueError(
+                f"ingredient span {span!r} not found at/after offset {cursor} "
+                f"in step text: {text!r}")
         annotations.append({
             "type": "INGREDIENT",
             "data": {"description": span},
             "position": {"offset": off, "length": len(span)},
         })
+        cursor = off + len(span)
 
     if settings is not None:
         data, label = settings
@@ -179,8 +183,10 @@ def build_instructions():
     ]
 
 
+TOOL = ["TM6"]
+
 METADATA = {
-    "tool": ["TM6"],
+    "tool": TOOL,
     "totalTime": 50 * 60,
     "prepTime": 15 * 60,
     "yield": {"value": 3, "unitText": "portion"},
@@ -213,12 +219,43 @@ def patch(session, recipe_id, body):
     return session.patch(url, headers=HEADERS, json=body, timeout=20)
 
 
+COOKIE_HINT = (
+    "Cookie appears expired (server returned a login redirect / non-JSON, "
+    "or 401/403). Log out and back in to Cookidoo and refresh COOKIDOO_COOKIE, "
+    "or re-run get_cookidoo_cookie.py."
+)
+
+
+def parse_json(resp, what):
+    """Return resp.json(), with an actionable error on auth/HTML responses."""
+    ctype = resp.headers.get("Content-Type", "")
+    if resp.status_code in (401, 403) or "json" not in ctype.lower():
+        print(f"ERROR: could not read JSON from {what} "
+              f"(status {resp.status_code}, content-type {ctype!r}).",
+              file=sys.stderr)
+        print(COOKIE_HINT, file=sys.stderr)
+        sys.exit(1)
+    try:
+        return resp.json()
+    except ValueError:
+        print(f"ERROR: {what} did not return valid JSON.", file=sys.stderr)
+        print(COOKIE_HINT, file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="print payload, don't upload")
     ap.add_argument("--update-id", metavar="RECIPE_ID",
                     help="PATCH this existing recipe in place instead of creating a new one")
+    ap.add_argument("--tool", choices=["TM6", "TM7"], default="TM6",
+                    help="Thermomix model to target (default TM6; TM7 is unverified)")
     args = ap.parse_args()
+
+    if args.tool == "TM7":
+        print("WARNING: --tool TM7 is untested/unverified against this private "
+              "API (schema was reverse-engineered from TM6 traffic).", file=sys.stderr)
+    metadata = {**METADATA, "tool": [args.tool]}
 
     instructions = build_instructions()
     ingredient_objs = [{"type": "INGREDIENT", "text": t} for t in INGREDIENTS]
@@ -226,7 +263,7 @@ def main():
         "name": NAME,
         "ingredients": ingredient_objs,
         "instructions": instructions,
-        **METADATA,
+        **metadata,
     }
 
     if args.dry_run:
@@ -247,23 +284,29 @@ def main():
         r = session.post(f"{DOMAIN}/created-recipes/{LOCALE}",
                          headers=HEADERS, json={"recipeName": NAME}, timeout=20)
         r.raise_for_status()
-        recipe_id = r.json().get("recipeId") or r.json().get("id")
+        j = parse_json(r, "create POST")
+        recipe_id = j.get("recipeId") or j.get("id")
+        if not recipe_id:
+            print(f"ERROR: create response had no recipeId/id: {j!r}", file=sys.stderr)
+            sys.exit(1)
         print(f"Created recipe stub: {recipe_id}")
 
     r = patch(session, recipe_id, {"instructions": instructions})
     print(f"PATCH instructions -> {r.status_code}")
     if not r.ok:
-        print(r.text[:500])
+        print(r.text[:500], file=sys.stderr)
+        r.raise_for_status()
 
-    r = patch(session, recipe_id, {"name": NAME, "ingredients": ingredient_objs, **METADATA})
+    r = patch(session, recipe_id, {"name": NAME, "ingredients": ingredient_objs, **metadata})
     print(f"PATCH ingredients+metadata -> {r.status_code}")
     if not r.ok:
-        print(r.text[:500])
+        print(r.text[:500], file=sys.stderr)
+        r.raise_for_status()
 
     g = session.get(f"{DOMAIN}/created-recipes/{LOCALE}/{recipe_id}",
                     headers={"Accept": "application/json", "User-Agent": HEADERS["User-Agent"]},
                     timeout=20)
-    rc = g.json().get("recipeContent", {})
+    rc = parse_json(g, "verify GET").get("recipeContent", {})
     print("\n--- VERIFY (recipeContent) ---")
     print("name:", rc.get("name"))
     print("ingredients:", len(rc.get("recipeIngredient", [])))

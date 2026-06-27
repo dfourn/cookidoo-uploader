@@ -35,9 +35,13 @@ import requests
 
 DOMAIN = "https://cookidoo.co.uk"
 LOCALE = "en-GB"
-CLOUD_NAME = "vorwerk-users-gc"
-API_KEY = "993585863591145"
-UPLOAD_PRESET = "prod-customer-recipe-signed"
+# These are public Cloudinary client identifiers (cloud name, API key, upload
+# preset) — not secrets. The api_secret stays server-side and never appears
+# here. They default to Cookidoo's production values but can be overridden via
+# the environment.
+CLOUD_NAME = os.environ.get("CLOUDINARY_CLOUD_NAME", "vorwerk-users-gc")
+API_KEY = os.environ.get("CLOUDINARY_API_KEY", "993585863591145")
+UPLOAD_PRESET = os.environ.get("CLOUDINARY_UPLOAD_PRESET", "prod-customer-recipe-signed")
 CLOUD_URL = f"https://api-eu.cloudinary.com/v1_1/{CLOUD_NAME}/image/upload"
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -65,6 +69,36 @@ def jpeg_size(path):
     raise ValueError(f"could not find image dimensions in {path}")
 
 
+SUPPORTED_FORMATS = "JPEG, PNG, WebP"
+
+
+def detect_image(path):
+    """Sniff magic bytes and return (mime_type, width, height).
+
+    width/height may be None when we don't parse dimensions for the format
+    (Cloudinary derives them from the uploaded file and returns them anyway).
+    Raises ValueError for unsupported formats.
+    """
+    with open(path, "rb") as f:
+        head = f.read(32)
+
+    if head[:3] == b"\xff\xd8\xff":
+        w, h = jpeg_size(path)
+        return "image/jpeg", w, h
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        # IHDR width/height are big-endian 4-byte ints at offsets 16 and 20.
+        w = int.from_bytes(head[16:20], "big")
+        h = int.from_bytes(head[20:24], "big")
+        return "image/png", w, h
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        # WebP dimension parsing is format-variant specific; let Cloudinary
+        # derive them from the file.
+        return "image/webp", None, None
+    raise ValueError(
+        f"{path}: unsupported image format (supported: {SUPPORTED_FORMATS})"
+    )
+
+
 def get_cookie():
     val = os.getenv("COOKIDOO_COOKIE")
     if val:
@@ -82,14 +116,21 @@ def get_cookie():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("recipe_id")
-    ap.add_argument("image", help="path to a JPEG image")
+    ap.add_argument("image", help=f"path to an image ({SUPPORTED_FORMATS})")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    w, h = jpeg_size(args.image)
-    coords = f"0,0,{w},{h}"
+    mime, w, h = detect_image(args.image)
+    # custom_coordinates needs pixel dimensions; only send it when we know them
+    # (and it must match between the signature request and the upload).
+    coords = f"0,0,{w},{h}" if w is not None and h is not None else None
     ts = int(time.time())
-    print(f"image {args.image} ({w}x{h}) -> recipe {args.recipe_id}")
+    dims = f"{w}x{h}" if coords else "unknown size"
+    print(f"image {args.image} ({mime}, {dims}) -> recipe {args.recipe_id}")
+
+    sig_body = {"timestamp": ts, "source": "uw"}
+    if coords:
+        sig_body["custom_coordinates"] = coords
 
     if args.dry_run:
         print(f"[dry-run] would request signature for timestamp={ts}, "
@@ -102,30 +143,40 @@ def main():
 
     # 1. signature
     r = s.post(f"{DOMAIN}/created-recipes/{LOCALE}/image/signature", headers=HEADERS,
-               json={"timestamp": ts, "source": "uw", "custom_coordinates": coords},
-               timeout=20)
-    r.raise_for_status()
-    signature = r.json()["signature"]
+               json=sig_body, timeout=20)
+    if not r.ok:
+        print("Signature request failed:", r.status_code, r.text[:500])
+        sys.exit(1)
+    try:
+        signature = r.json()["signature"]
+    except (ValueError, KeyError):
+        print("Signature response was not the expected JSON:", r.text[:500])
+        sys.exit(1)
     print("got signature")
 
     # 2. Cloudinary upload (multipart; no cookie, auth via api_key + signature)
     with open(args.image, "rb") as f:
-        files = {"file": (os.path.basename(args.image), f, "image/jpeg")}
+        files = {"file": (os.path.basename(args.image), f, mime)}
         data = {
             "upload_preset": UPLOAD_PRESET,
             "source": "uw",
             "signature": signature,
             "timestamp": str(ts),
             "api_key": API_KEY,
-            "custom_coordinates": coords,
         }
+        if coords:
+            data["custom_coordinates"] = coords
         cr = requests.post(CLOUD_URL, data=data, files=files,
                            headers={"User-Agent": UA}, timeout=60)
     if not cr.ok:
         print("Cloudinary upload failed:", cr.status_code, cr.text[:500])
         sys.exit(1)
-    cj = cr.json()
-    image_val = f"{cj['public_id']}.{cj['format']}"
+    try:
+        cj = cr.json()
+        image_val = f"{cj['public_id']}.{cj['format']}"
+    except (ValueError, KeyError):
+        print("Cloudinary response was not the expected JSON:", cr.text[:500])
+        sys.exit(1)
     print("uploaded:", cj.get("secure_url"))
 
     # 3. PATCH recipe
@@ -139,7 +190,13 @@ def main():
     # verify
     g = s.get(f"{DOMAIN}/created-recipes/{LOCALE}/{args.recipe_id}",
               headers={"Accept": "application/json", "User-Agent": UA}, timeout=20)
-    print("recipe image now:", g.json().get("recipeContent", {}).get("image"))
+    if not g.ok:
+        print("Could not re-fetch recipe to verify:", g.status_code, g.text[:500])
+        return
+    try:
+        print("recipe image now:", g.json().get("recipeContent", {}).get("image"))
+    except ValueError:
+        print("Recipe verify response was not JSON:", g.text[:500])
 
 
 if __name__ == "__main__":

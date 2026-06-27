@@ -1,9 +1,11 @@
 # Cookidoo Uploader
 
-Upload your own recipes to [Cookidoo](https://cookidoo.co.uk) as **Created Recipes**
-with fully programmable **TM6 guided-cooking steps** — each step can carry the
-time / temperature / speed / reverse settings that drive the machine, plus
-auto-weigh ingredient annotations.
+Upload your own recipes to [Cookidoo](https://cookidoo.co.uk) — Thermomix's
+official recipe platform — as **Created Recipes** with fully programmable
+guided-cooking steps for the **Thermomix TM6** (and, experimentally, the
+**TM7**). Each step can carry the time / temperature / speed / reverse settings
+that drive the machine, plus auto-weigh ingredient annotations, so your own
+Thermomix recipes run as guided cooking just like Cookidoo's own.
 
 This talks directly to the same private `created-recipes` API the Cookidoo web
 app uses, with the request schema reverse-engineered from captured browser
@@ -66,10 +68,29 @@ Re-run against an existing recipe instead of creating a new one:
 python scripts/upload_chicken_tikka_masala.py --update-id <RECIPE_ID>
 ```
 
+### Choosing the Thermomix model
+
+The upload scripts take a `--tool {TM6,TM7}` flag (default `TM6`) that sets the
+`tool` value sent to the API:
+
+```bash
+python scripts/upload_chicken_tikka_masala.py --tool TM7
+```
+
+> **TM7 support is experimental and untested.** The API schema — including the
+> `tool` value — was reverse-engineered from captured **TM6** browser traffic,
+> and `TM6` is the only value confirmed to work. `TM7` *should* behave the same
+> way, but it has not been verified against the live API: the endpoint may
+> reject the `tool` enum, and the TM7's different hardware (temperature range,
+> speed settings) means guided steps could behave differently. If you have a
+> TM7, feedback on what works is very welcome.
+
 To attach a photo, see `scripts/upload_recipe_image.py`.
 
-The source recipes these scripts are built from live in [`example/`](example/)
-as plain Markdown — a good template for writing your own.
+The [`example/`](example/) folder holds plain-Markdown source templates for the
+recipes — a readable starting point for writing your own. Note these are
+human-readable references only: the `upload_*.py` scripts do **not** parse them,
+they each encode their recipe data directly in Python.
 
 ## Writing a new recipe
 
@@ -83,7 +104,8 @@ Copy one of the `upload_*.py` scripts and edit three things:
     step text and the matching span is annotated for guided cooking.
   - `step(text, settings=tts(...), ingredient_spans=[...])` — `ingredient_spans`
     are exact substrings of the step text that get tagged for auto-weighing.
-- `METADATA` — `tool`, `totalTime`, `prepTime` (seconds), `yield`.
+- `METADATA` — `totalTime`, `prepTime` (seconds), `yield`. The `tool` value
+  (`TM6` by default, or `TM7` via `--tool`) is applied at upload time.
 
 ## API schema notes
 
@@ -101,7 +123,7 @@ Confirmed from captured `PATCH` traffic — the non-obvious bits:
 | Ingredient annotation | `{"type": "INGREDIENT", "data": {"description": "<exact text>"}, "position": {...}}` |
 | `totalTime` / `prepTime` | int **seconds** (not ISO `PT25M`) |
 | `yield` | `{"value": 2, "unitText": "portion"}` (key is `yield`; `recipeYield` is ignored) |
-| `tool` | `["TM6"]` |
+| `tool` | `["TM6"]` confirmed from captured traffic (the only value verified to work). `["TM7"]` is selectable via `--tool TM7` but is unverified against the live API. |
 
 `position` offsets/lengths index into the step's `text`, so annotation spans
 must exactly match the substring they cover.

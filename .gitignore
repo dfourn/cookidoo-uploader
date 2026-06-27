@@ -2,6 +2,12 @@
 *.har
 .env
 cookidoo_cookie.txt
+cookidoo_investigation/
+
+# Recipe photos (may carry EXIF / location metadata)
+*.jpg
+*.jpeg
+*.png
 
 # Python
 __pycache__/
