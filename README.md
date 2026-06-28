@@ -1,9 +1,11 @@
 # Cookidoo Uploader
 
-Upload your own recipes to [Cookidoo](https://cookidoo.co.uk) as **Created Recipes**
-with fully programmable **TM6 guided-cooking steps** — each step can carry the
-time / temperature / speed / reverse settings that drive the machine, plus
-auto-weigh ingredient annotations.
+Upload your own recipes to [Cookidoo](https://cookidoo.co.uk) — Thermomix's
+official recipe platform — as **Created Recipes** with fully programmable
+guided-cooking steps for the **Thermomix TM6** (and, experimentally, the
+**TM7**). Each step can carry the time / temperature / speed / reverse settings
+that drive the machine, plus auto-weigh ingredient annotations, so your own
+Thermomix recipes run as guided cooking just like Cookidoo's own.
 
 This talks directly to the same private `created-recipes` API the Cookidoo web
 app uses, with the request schema reverse-engineered from captured browser
@@ -23,16 +25,24 @@ traffic.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .          # installs the `cookidoo` command
 ```
+
+This installs the `cookidoo_uploader` package and a `cookidoo` console command.
 
 ## Authentication
 
-The scripts read the `_oauth2_proxy` cookie in one of two ways:
+The tool reads the `_oauth2_proxy` cookie in one of two ways:
 
-- **Automatic** — `scripts/get_cookidoo_cookie.py` reads it straight from your
-  installed browser (Chrome/Safari/Firefox/Edge/Brave). On macOS the first run
-  triggers a one-time Keychain prompt to decrypt the browser cookie store.
+- **Automatic** — `cookidoo cookie` reads it straight from your installed
+  browser (Chrome/Safari/Firefox/Edge/Brave). On macOS the first run triggers a
+  one-time Keychain prompt to decrypt the browser cookie store. Export it into
+  your shell with:
+
+  ```bash
+  eval "$(cookidoo cookie --export)"
+  ```
+
 - **Manual** — set it yourself if you'd rather not touch the browser store:
 
   ```bash
@@ -45,45 +55,153 @@ The scripts read the `_oauth2_proxy` cookie in one of two ways:
 > The cookie is a live session credential. Never commit it — `.har` files and
 > `.env` are gitignored for this reason.
 
+### Automatic login (credentials)
+
+You can store your Cookidoo email and password so the tool logs in and fetches
+the session cookie itself — no browser interaction needed.
+
+**Setup:**
+
+1. Install the optional keychain extra:
+
+   ```bash
+   pip install -e ".[login]"
+   ```
+
+2. Create `~/.config/cookidoo/config.toml`:
+
+   ```toml
+   [auth]
+   email = "you@example.com"
+   # password is read from the OS keychain; see step 3.
+
+   [cookidoo]
+   domain = "https://cookidoo.co.uk"   # your regional domain
+   locale = "en-GB"
+   ```
+
+3. Store your password in the OS keychain (recommended — never written to disk):
+
+   ```bash
+   cookidoo login --set-password
+   ```
+
+   Alternatively, set `COOKIDOO_EMAIL` / `COOKIDOO_PASSWORD` environment
+   variables, or add `password = "..."` to `[auth]` in the config file (ensure
+   the file is `chmod 600`).
+
+4. Log in and cache the session cookie:
+
+   ```bash
+   cookidoo login
+   ```
+
+   On success the cookie is cached in `~/.config/cookidoo/cookie.json` (mode
+   0600) and reused for subsequent commands until it expires.
+
+**Credential resolution order** (highest → lowest priority):
+
+| Source | How to set |
+| --- | --- |
+| Environment variable | `COOKIDOO_EMAIL` / `COOKIDOO_PASSWORD` |
+| OS keychain | `cookidoo login --set-password` |
+| Config file | `~/.config/cookidoo/config.toml` `[auth] password` (0600 only) |
+| Interactive prompt | Shown when a TTY is present and email is known |
+
+If no credentials are configured the tool falls through silently to the
+browser-cookie extraction path, so existing workflows are unaffected.
+
+> **Note:** This login flow is reverse-engineered from community projects and
+> has **not** been verified against MFA-protected accounts or all regions.  If
+> login is blocked (CAPTCHA, MFA, step-up challenge) the tool raises a clear
+> error and you should use `cookidoo cookie --export` instead.  See
+> [`docs/auto-login-plan.md`](docs/auto-login-plan.md) for design details.
+
 ## Usage
 
-Each `upload_*.py` script encodes one recipe. Preview the JSON payload without
-sending anything:
+List the built-in recipes:
 
 ```bash
-python scripts/upload_chicken_tikka_masala.py --dry-run
+cookidoo list
+```
+
+Preview a recipe's JSON payload without sending anything:
+
+```bash
+cookidoo upload chicken-tikka-masala --dry-run
 ```
 
 Create it live in your Cookidoo account:
 
 ```bash
-python scripts/upload_chicken_tikka_masala.py
+cookidoo upload chicken-tikka-masala
 ```
 
 Re-run against an existing recipe instead of creating a new one:
 
 ```bash
-python scripts/upload_chicken_tikka_masala.py --update-id <RECIPE_ID>
+cookidoo upload chicken-tikka-masala --update-id <RECIPE_ID>
 ```
 
-To attach a photo, see `scripts/upload_recipe_image.py`.
+### Choosing the Thermomix model
 
-The source recipes these scripts are built from live in [`example/`](example/)
-as plain Markdown — a good template for writing your own.
+`cookidoo upload` takes a `--tool {TM6,TM7}` flag (default `TM6`) that sets the
+`tool` value sent to the API:
+
+```bash
+cookidoo upload chicken-tikka-masala --tool TM7
+```
+
+> **TM7 support is experimental and untested.** The API schema — including the
+> `tool` value — was reverse-engineered from captured **TM6** browser traffic,
+> and `TM6` is the only value confirmed to work. `TM7` *should* behave the same
+> way, but it has not been verified against the live API: the endpoint may
+> reject the `tool` enum, and the TM7's different hardware (temperature range,
+> speed settings) means guided steps could behave differently. If you have a
+> TM7, feedback on what works is very welcome.
+
+Attach a photo to a recipe:
+
+```bash
+cookidoo image <RECIPE_ID> path/to/photo.jpg   # JPEG, PNG, or WebP
+```
+
+The [`example/`](example/) folder holds plain-Markdown source templates for the
+recipes — a readable starting point for writing your own. Note these are
+human-readable references only: the recipe modules do **not** parse them, they
+each encode their recipe data directly in Python.
 
 ## Writing a new recipe
 
-Copy one of the `upload_*.py` scripts and edit three things:
+Add a module under `cookidoo_uploader/recipes/` (copy an existing one) that
+defines a `RECIPE`, then register it in `cookidoo_uploader/recipes/__init__.py`.
+A recipe needs three things:
 
 - `INGREDIENTS` — list of strings. Each becomes
   `{"type": "INGREDIENT", "text": ...}`.
-- `build_instructions()` — one `step(...)` per guided step. Use the helpers:
+- `INSTRUCTIONS` — one `step(...)` per guided step, using the helpers from
+  `cookidoo_uploader.schema`:
   - `tts(time, speed, temp=None, reverse=False)` — attaches TM6 settings. A
     human-readable label (`5 min/100°C/speed 1/reverse`) is appended to the
     step text and the matching span is annotated for guided cooking.
   - `step(text, settings=tts(...), ingredient_spans=[...])` — `ingredient_spans`
-    are exact substrings of the step text that get tagged for auto-weighing.
-- `METADATA` — `tool`, `totalTime`, `prepTime` (seconds), `yield`.
+    are exact substrings of the step text that get tagged for auto-weighing
+    (located in order, so a repeated phrase still gets distinct offsets).
+- A `Recipe(...)` carrying `name`, `total_time`, `prep_time` (seconds) and
+  `yield_value`. The `tool` value (`TM6` by default, or `TM7` via `--tool`) is
+  applied at upload time.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest          # offline unit/golden tests (no creds, no network)
+ruff check .
+```
+
+The tests cover the annotation-offset maths, payload schema, the HTTP client
+(with a mocked session), and image content-type detection — none of which need
+a Cookidoo account.
 
 ## API schema notes
 
@@ -101,7 +219,7 @@ Confirmed from captured `PATCH` traffic — the non-obvious bits:
 | Ingredient annotation | `{"type": "INGREDIENT", "data": {"description": "<exact text>"}, "position": {...}}` |
 | `totalTime` / `prepTime` | int **seconds** (not ISO `PT25M`) |
 | `yield` | `{"value": 2, "unitText": "portion"}` (key is `yield`; `recipeYield` is ignored) |
-| `tool` | `["TM6"]` |
+| `tool` | `["TM6"]` confirmed from captured traffic (the only value verified to work). `["TM7"]` is selectable via `--tool TM7` but is unverified against the live API. |
 
 `position` offsets/lengths index into the step's `text`, so annotation spans
 must exactly match the substring they cover.
