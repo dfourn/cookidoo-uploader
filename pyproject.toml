@@ -7,7 +7,7 @@ name = "cookidoo-uploader"
 version = "0.1.0"
 description = "Upload custom recipes to Cookidoo with programmable Thermomix guided-cooking steps"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
     "requests>=2.32",
@@ -19,6 +19,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+login = [
+    # Optional OS keychain integration.  The HTTP login itself has no extra deps.
+    "keyring>=24",
+]
 dev = [
     "pytest>=8",
     "ruff>=0.5",

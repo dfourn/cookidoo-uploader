@@ -1,4 +1,4 @@
-"""Command-line entry point: `cookidoo <upload|image|cookie|list>`."""
+"""Command-line entry point: `cookidoo <upload|image|cookie|login|list>`."""
 
 import argparse
 import json
@@ -90,6 +90,71 @@ def cmd_cookie(args):
     return 0
 
 
+def cmd_login(args):
+    """Log in with stored credentials, cache the cookie, and print success."""
+    if args.set_password:
+        # Store password in the OS keychain via getpass.
+        try:
+            import keyring  # type: ignore[import]
+        except ImportError:
+            print(
+                "ERROR: keyring is not installed. "
+                "Install it with: pip install 'cookidoo-uploader[login]'",
+                file=sys.stderr,
+            )
+            return 1
+
+        import getpass
+
+        from .userconfig import _KEYRING_SERVICE, load_config, resolve_email
+
+        config = load_config()
+        email = resolve_email(config=config)
+        if not email:
+            # Fall back to a prompt so the command is still usable without config.
+            try:
+                email = input("Cookidoo email: ").strip() or None
+            except (KeyboardInterrupt, EOFError):
+                print("\nAborted.", file=sys.stderr)
+                return 1
+        if not email:
+            print(
+                "ERROR: No email found. Set COOKIDOO_EMAIL or add "
+                "`email` to ~/.config/cookidoo/config.toml",
+                file=sys.stderr,
+            )
+            return 1
+
+        try:
+            password = getpass.getpass(f"Password for {email}: ")
+        except (KeyboardInterrupt, EOFError):
+            print("\nAborted.", file=sys.stderr)
+            return 1
+        if not password:
+            print("ERROR: Empty password — aborted.", file=sys.stderr)
+            return 1
+
+        keyring.set_password(_KEYRING_SERVICE, email, password)
+        print(f"Password stored in keyring for {email}.")
+        return 0
+
+    # Perform login and cache the cookie.
+    from .login import get_cookie_via_login
+
+    result = get_cookie_via_login()
+    if result is None:
+        print(
+            "No credentials configured. Add your email and password to "
+            "~/.config/cookidoo/config.toml, set COOKIDOO_EMAIL/COOKIDOO_PASSWORD, "
+            "or run `cookidoo login --set-password` to store in the keychain.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print("Login successful. Cookie cached (valid for this session).")
+    return 0
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="cookidoo",
@@ -119,6 +184,17 @@ def build_parser():
     sp.add_argument("--export", action="store_true",
                     help="print a shell `export COOKIDOO_COOKIE=...` line")
     sp.set_defaults(func=cmd_cookie)
+
+    sp = sub.add_parser(
+        "login",
+        help="log in with stored credentials and cache the session cookie",
+    )
+    sp.add_argument(
+        "--set-password",
+        action="store_true",
+        help="store your password in the OS keychain (requires keyring)",
+    )
+    sp.set_defaults(func=cmd_login)
 
     return p
 

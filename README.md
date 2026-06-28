@@ -55,8 +55,67 @@ The tool reads the `_oauth2_proxy` cookie in one of two ways:
 > The cookie is a live session credential. Never commit it — `.har` files and
 > `.env` are gitignored for this reason.
 
-A planned **config-file auto-login** (email/password → cookie, no browser
-extraction) is designed in [`docs/auto-login-plan.md`](docs/auto-login-plan.md).
+### Automatic login (credentials)
+
+You can store your Cookidoo email and password so the tool logs in and fetches
+the session cookie itself — no browser interaction needed.
+
+**Setup:**
+
+1. Install the optional keychain extra:
+
+   ```bash
+   pip install -e ".[login]"
+   ```
+
+2. Create `~/.config/cookidoo/config.toml`:
+
+   ```toml
+   [auth]
+   email = "you@example.com"
+   # password is read from the OS keychain; see step 3.
+
+   [cookidoo]
+   domain = "https://cookidoo.co.uk"   # your regional domain
+   locale = "en-GB"
+   ```
+
+3. Store your password in the OS keychain (recommended — never written to disk):
+
+   ```bash
+   cookidoo login --set-password
+   ```
+
+   Alternatively, set `COOKIDOO_EMAIL` / `COOKIDOO_PASSWORD` environment
+   variables, or add `password = "..."` to `[auth]` in the config file (ensure
+   the file is `chmod 600`).
+
+4. Log in and cache the session cookie:
+
+   ```bash
+   cookidoo login
+   ```
+
+   On success the cookie is cached in `~/.config/cookidoo/cookie.json` (mode
+   0600) and reused for subsequent commands until it expires.
+
+**Credential resolution order** (highest → lowest priority):
+
+| Source | How to set |
+| --- | --- |
+| Environment variable | `COOKIDOO_EMAIL` / `COOKIDOO_PASSWORD` |
+| OS keychain | `cookidoo login --set-password` |
+| Config file | `~/.config/cookidoo/config.toml` `[auth] password` (0600 only) |
+| Interactive prompt | Shown when a TTY is present and email is known |
+
+If no credentials are configured the tool falls through silently to the
+browser-cookie extraction path, so existing workflows are unaffected.
+
+> **Note:** This login flow is reverse-engineered from community projects and
+> has **not** been verified against MFA-protected accounts or all regions.  If
+> login is blocked (CAPTCHA, MFA, step-up challenge) the tool raises a clear
+> error and you should use `cookidoo cookie --export` instead.  See
+> [`docs/auto-login-plan.md`](docs/auto-login-plan.md) for design details.
 
 ## Usage
 

@@ -1,4 +1,15 @@
-"""Resolve the `_oauth2_proxy` session cookie from the env or the browser."""
+"""Resolve the ``_oauth2_proxy`` session cookie.
+
+Resolution order:
+  1. ``$COOKIDOO_COOKIE`` environment variable  (existing behaviour, unchanged)
+  2. Disk cache from a previous auto-login
+  3. Credential-based auto-login (then cached for future runs)
+  4. Browser cookie extraction via ``browser_cookie3``
+  5. :class:`~cookidoo_uploader.errors.CookidooError` is raised
+
+All imports for optional dependencies (keyring, browser_cookie3, tomllib) are
+deferred so the package stays importable without them installed.
+"""
 
 import os
 
@@ -17,10 +28,10 @@ DOMAINS = [
 
 
 def find_cookie():
-    """Return (value, browser_name, domain) for the first match found, else None.
+    """Return ``(value, browser_name, domain)`` for the first match found, else ``None``.
 
-    browser_cookie3 is imported lazily so the package (and its tests) load
-    without it — it's only needed for the browser-reading path.
+    ``browser_cookie3`` is imported lazily so the package (and its tests) load
+    without it — it is only needed for the browser-reading path.
     """
     import browser_cookie3
 
@@ -45,16 +56,51 @@ def find_cookie():
 
 
 def get_cookie() -> str:
-    """Return the cookie value from $COOKIDOO_COOKIE, else from the browser.
+    """Return the ``_oauth2_proxy`` cookie value.
 
-    Raises CookidooError if neither source yields a cookie.
+    Tries each source in the resolution order documented in the module
+    docstring.  Raises :class:`~cookidoo_uploader.errors.CookidooError` only
+    after all sources are exhausted.
+
+    :class:`~cookidoo_uploader.errors.LoginError` subclasses (bad credentials,
+    MFA required, flow changed) propagate directly to the caller — they carry
+    actionable messages and should not be silently swallowed.
     """
+    # 1. Explicit env override — existing behaviour, highest priority.
     val = os.getenv("COOKIDOO_COOKIE")
     if val:
         return val
+
+    # 2. Disk cache from a previous successful login.
+    try:
+        from .cache import read_cached_cookie
+        cached = read_cached_cookie()
+        if cached:
+            return cached
+    except Exception:
+        pass
+
+    # 3. Credential-based auto-login.  LoginError subclasses propagate; only
+    #    ImportError (login module unavailable) is swallowed.
+    try:
+        from .login import get_cookie_via_login
+    except ImportError:
+        pass
+    else:
+        auto = get_cookie_via_login()
+        if auto:
+            return auto
+
+    # 4. Browser cookie extraction.
     res = find_cookie()
-    if not res:
-        raise CookidooError(
-            "No Cookidoo cookie found. Set $COOKIDOO_COOKIE or log in to "
-            "Cookidoo in a supported browser and re-run `cookidoo cookie`.")
-    return res[0]
+    if res:
+        return res[0]
+
+    raise CookidooError(
+        "No Cookidoo cookie found. Options:\n"
+        "  • Set $COOKIDOO_COOKIE\n"
+        "  • Configure credentials in ~/.config/cookidoo/config.toml "
+        "and run `cookidoo login`\n"
+        "  • Log in to Cookidoo in a supported browser and re-run "
+        "`cookidoo cookie`"
+    )
