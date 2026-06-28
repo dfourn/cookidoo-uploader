@@ -3,6 +3,10 @@
 .env
 cookidoo_cookie.txt
 cookidoo_investigation/
+# User credential config / cached session cookie (see docs/auto-login-plan.md)
+.cookidoo.toml
+config.toml
+cookie.json
 
 # Recipe photos (may carry EXIF / location metadata)
 *.jpg
@@ -13,6 +17,10 @@ cookidoo_investigation/
 __pycache__/
 *.py[cod]
 *.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
 .venv/
 venv/
 cookiput_venv/

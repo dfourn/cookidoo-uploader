@@ -25,16 +25,24 @@ traffic.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .          # installs the `cookidoo` command
 ```
+
+This installs the `cookidoo_uploader` package and a `cookidoo` console command.
 
 ## Authentication
 
-The scripts read the `_oauth2_proxy` cookie in one of two ways:
+The tool reads the `_oauth2_proxy` cookie in one of two ways:
 
-- **Automatic** — `scripts/get_cookidoo_cookie.py` reads it straight from your
-  installed browser (Chrome/Safari/Firefox/Edge/Brave). On macOS the first run
-  triggers a one-time Keychain prompt to decrypt the browser cookie store.
+- **Automatic** — `cookidoo cookie` reads it straight from your installed
+  browser (Chrome/Safari/Firefox/Edge/Brave). On macOS the first run triggers a
+  one-time Keychain prompt to decrypt the browser cookie store. Export it into
+  your shell with:
+
+  ```bash
+  eval "$(cookidoo cookie --export)"
+  ```
+
 - **Manual** — set it yourself if you'd rather not touch the browser store:
 
   ```bash
@@ -47,34 +55,42 @@ The scripts read the `_oauth2_proxy` cookie in one of two ways:
 > The cookie is a live session credential. Never commit it — `.har` files and
 > `.env` are gitignored for this reason.
 
+A planned **config-file auto-login** (email/password → cookie, no browser
+extraction) is designed in [`docs/auto-login-plan.md`](docs/auto-login-plan.md).
+
 ## Usage
 
-Each `upload_*.py` script encodes one recipe. Preview the JSON payload without
-sending anything:
+List the built-in recipes:
 
 ```bash
-python scripts/upload_chicken_tikka_masala.py --dry-run
+cookidoo list
+```
+
+Preview a recipe's JSON payload without sending anything:
+
+```bash
+cookidoo upload chicken-tikka-masala --dry-run
 ```
 
 Create it live in your Cookidoo account:
 
 ```bash
-python scripts/upload_chicken_tikka_masala.py
+cookidoo upload chicken-tikka-masala
 ```
 
 Re-run against an existing recipe instead of creating a new one:
 
 ```bash
-python scripts/upload_chicken_tikka_masala.py --update-id <RECIPE_ID>
+cookidoo upload chicken-tikka-masala --update-id <RECIPE_ID>
 ```
 
 ### Choosing the Thermomix model
 
-The upload scripts take a `--tool {TM6,TM7}` flag (default `TM6`) that sets the
+`cookidoo upload` takes a `--tool {TM6,TM7}` flag (default `TM6`) that sets the
 `tool` value sent to the API:
 
 ```bash
-python scripts/upload_chicken_tikka_masala.py --tool TM7
+cookidoo upload chicken-tikka-masala --tool TM7
 ```
 
 > **TM7 support is experimental and untested.** The API schema — including the
@@ -85,27 +101,48 @@ python scripts/upload_chicken_tikka_masala.py --tool TM7
 > speed settings) means guided steps could behave differently. If you have a
 > TM7, feedback on what works is very welcome.
 
-To attach a photo, see `scripts/upload_recipe_image.py`.
+Attach a photo to a recipe:
+
+```bash
+cookidoo image <RECIPE_ID> path/to/photo.jpg   # JPEG, PNG, or WebP
+```
 
 The [`example/`](example/) folder holds plain-Markdown source templates for the
 recipes — a readable starting point for writing your own. Note these are
-human-readable references only: the `upload_*.py` scripts do **not** parse them,
-they each encode their recipe data directly in Python.
+human-readable references only: the recipe modules do **not** parse them, they
+each encode their recipe data directly in Python.
 
 ## Writing a new recipe
 
-Copy one of the `upload_*.py` scripts and edit three things:
+Add a module under `cookidoo_uploader/recipes/` (copy an existing one) that
+defines a `RECIPE`, then register it in `cookidoo_uploader/recipes/__init__.py`.
+A recipe needs three things:
 
 - `INGREDIENTS` — list of strings. Each becomes
   `{"type": "INGREDIENT", "text": ...}`.
-- `build_instructions()` — one `step(...)` per guided step. Use the helpers:
+- `INSTRUCTIONS` — one `step(...)` per guided step, using the helpers from
+  `cookidoo_uploader.schema`:
   - `tts(time, speed, temp=None, reverse=False)` — attaches TM6 settings. A
     human-readable label (`5 min/100°C/speed 1/reverse`) is appended to the
     step text and the matching span is annotated for guided cooking.
   - `step(text, settings=tts(...), ingredient_spans=[...])` — `ingredient_spans`
-    are exact substrings of the step text that get tagged for auto-weighing.
-- `METADATA` — `totalTime`, `prepTime` (seconds), `yield`. The `tool` value
-  (`TM6` by default, or `TM7` via `--tool`) is applied at upload time.
+    are exact substrings of the step text that get tagged for auto-weighing
+    (located in order, so a repeated phrase still gets distinct offsets).
+- A `Recipe(...)` carrying `name`, `total_time`, `prep_time` (seconds) and
+  `yield_value`. The `tool` value (`TM6` by default, or `TM7` via `--tool`) is
+  applied at upload time.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest          # offline unit/golden tests (no creds, no network)
+ruff check .
+```
+
+The tests cover the annotation-offset maths, payload schema, the HTTP client
+(with a mocked session), and image content-type detection — none of which need
+a Cookidoo account.
 
 ## API schema notes
 

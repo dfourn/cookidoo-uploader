@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cookidoo-uploader"
+version = "0.1.0"
+description = "Upload custom recipes to Cookidoo with programmable Thermomix guided-cooking steps"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "requests>=2.32",
+    # Browser cookie extraction (and its decrypt deps). Only needed for the
+    # `cookidoo cookie` / browser-fallback auth path.
+    "browser-cookie3>=0.20",
+    "lz4>=4.4",
+    "pycryptodomex>=3.23",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+cookidoo = "cookidoo_uploader.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cookidoo_uploader*"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
